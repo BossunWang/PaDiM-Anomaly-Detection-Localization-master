@@ -16,17 +16,26 @@ from skimage import morphology
 from skimage.segmentation import mark_boundaries
 import matplotlib.pyplot as plt
 import matplotlib
+import time
 
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision.models import wide_resnet50_2, resnet18
+
 import datasets.mvtec as mvtec
+from resnet import CustomResnet
 
 
 # device setup
 use_cuda = torch.cuda.is_available()
 device = torch.device('cuda' if use_cuda else 'cpu')
+
+
+def mahalanobis_torch(u, v, cov_inv):
+    delta = u - v
+    m = torch.dot(delta, torch.matmul(cov_inv, delta))
+    return torch.sqrt(m)
 
 
 def parse_args():
@@ -43,13 +52,13 @@ def main():
 
     # load model
     if args.arch == 'resnet18':
-        model = resnet18(pretrained=True, progress=True)
         t_d = 448
         d = 100
     elif args.arch == 'wide_resnet50_2':
-        model = wide_resnet50_2(pretrained=True, progress=True)
         t_d = 1792
         d = 550
+
+    model = CustomResnet(args.arch, pretrained=True)
     model.to(device)
     model.eval()
     random.seed(1024)
@@ -57,17 +66,7 @@ def main():
     if use_cuda:
         torch.cuda.manual_seed_all(1024)
 
-    idx = torch.tensor(sample(range(0, t_d), d))
-
-    # set model's intermediate outputs
-    outputs = []
-
-    def hook(module, input, output):
-        outputs.append(output)
-
-    model.layer1[-1].register_forward_hook(hook)
-    model.layer2[-1].register_forward_hook(hook)
-    model.layer3[-1].register_forward_hook(hook)
+    idx = torch.tensor(sample(range(0, t_d), d)).to(device)
 
     os.makedirs(os.path.join(args.save_path, 'temp_%s' % args.arch), exist_ok=True)
     fig, ax = plt.subplots(1, 2, figsize=(20, 10))
@@ -93,12 +92,11 @@ def main():
             for (x, _, _) in tqdm(train_dataloader, '| feature extraction | train | %s |' % class_name):
                 # model prediction
                 with torch.no_grad():
-                    _ = model(x.to(device))
+                    outputs = model(x.to(device))
                 # get intermediate layer outputs
                 for k, v in zip(train_outputs.keys(), outputs):
                     train_outputs[k].append(v.cpu().detach())
-                # initialize hook outputs
-                outputs = []
+
             for k, v in train_outputs.items():
                 train_outputs[k] = torch.cat(v, 0)
 
@@ -108,18 +106,19 @@ def main():
                 embedding_vectors = embedding_concat(embedding_vectors, train_outputs[layer_name])
 
             # randomly select d dimension
-            embedding_vectors = torch.index_select(embedding_vectors, 1, idx)
+            embedding_vectors = torch.index_select(embedding_vectors, 1, idx.cpu())
             # calculate multivariate Gaussian distribution
             B, C, H, W = embedding_vectors.size()
             embedding_vectors = embedding_vectors.view(B, C, H * W)
             mean = torch.mean(embedding_vectors, dim=0).numpy()
-            cov = torch.zeros(C, C, H * W).numpy()
+            cov_inv = torch.zeros(C, C, H * W).numpy()
             I = np.identity(C)
             for i in range(H * W):
                 # cov[:, :, i] = LedoitWolf().fit(embedding_vectors[:, :, i].numpy()).covariance_
-                cov[:, :, i] = np.cov(embedding_vectors[:, :, i].numpy(), rowvar=False) + 0.01 * I
+                cov = np.cov(embedding_vectors[:, :, i].numpy(), rowvar=False) + 0.01 * I
+                cov_inv[:, :, i] = np.linalg.inv(cov)
             # save learned distribution
-            train_outputs = [mean, cov]
+            train_outputs = [mean, cov_inv]
             with open(train_feature_filepath, 'wb') as f:
                 pickle.dump(train_outputs, f)
         else:
@@ -137,13 +136,16 @@ def main():
             gt_list.extend(y.cpu().detach().numpy())
             gt_mask_list.extend(mask.cpu().detach().numpy())
             # model prediction
+            start_inf_time = time.time()
             with torch.no_grad():
-                _ = model(x.to(device))
+                outputs = model(x.to(device))
+            end_inf_time = time.time()
             # get intermediate layer outputs
             for k, v in zip(test_outputs.keys(), outputs):
-                test_outputs[k].append(v.cpu().detach())
-            # initialize hook outputs
-            outputs = []
+                test_outputs[k].append(v)
+            print(f'inference time:{end_inf_time - start_inf_time}')
+
+        start_fill_time = time.time()
         for k, v in test_outputs.items():
             test_outputs[k] = torch.cat(v, 0)
         
@@ -154,33 +156,57 @@ def main():
 
         # randomly select d dimension
         embedding_vectors = torch.index_select(embedding_vectors, 1, idx)
-        
+        end_fill_time = time.time()
+        print(f'fill vector time:{end_fill_time - start_fill_time}')
+
+        start_dist_time = time.time()
         # calculate distance matrix
         B, C, H, W = embedding_vectors.size()
-        embedding_vectors = embedding_vectors.view(B, C, H * W).numpy()
+        # print(f'embedding_vectors:{embedding_vectors.size()}')
+        embedding_vectors = embedding_vectors.view(B, C, H * W)
         dist_list = []
-        for i in range(H * W):
-            mean = train_outputs[0][:, i]
-            conv_inv = np.linalg.inv(train_outputs[1][:, :, i])
-            dist = [mahalanobis(sample[:, i], mean, conv_inv) for sample in embedding_vectors]
-            dist_list.append(dist)
 
-        dist_list = np.array(dist_list).transpose(1, 0).reshape(B, H, W)
+        # print(f"train_outputs[0]:{train_outputs[0].shape}")
+        # print(f"train_outputs[1]:{train_outputs[1].shape}")
+        # print(f"embedding_vectors:{embedding_vectors.shape}")
+        mean_matrix = torch.from_numpy(train_outputs[0]).to(device)
+        embedding_vectors_zero_mean = (embedding_vectors - mean_matrix).permute(0, 2, 1)
+        cov_inv_matrix = torch.from_numpy(train_outputs[1]).permute(2, 0, 1).to(device)
+
+        # print(f"embedding_vectors_zero_mean:{embedding_vectors_zero_mean.shape}")
+        # print(f"cov_inv_matrix:{cov_inv_matrix.shape}")
+        mul_mat = torch.einsum('bcd,abd->abc', cov_inv_matrix, embedding_vectors_zero_mean)
+        dist_list = torch.einsum('abc,abc->ab', embedding_vectors_zero_mean, mul_mat)
+        dist_list = dist_list.reshape(B, H, W).cpu().detach().numpy()
+        end_inf_time = time.time()
+        print(f'calculate distance time:{end_inf_time - start_dist_time}')
+
+        # for i in range(H * W):
+        #     mean = torch.from_numpy(train_outputs[0][:, i]).to(device)
+        #     conv_inv = torch.from_numpy(train_outputs[1][:, :, i]).to(device)
+        #     dist = [mahalanobis_torch(ev[:, i], mean, conv_inv).cpu().detach() for ev in embedding_vectors]
+        #     # conv_inv = np.linalg.inv(train_outputs[1][:, :, i])
+        #     # dist = [mahalanobis(sample[:, i], mean, conv_inv) for sample in embedding_vectors]
+        #     dist_list.append(dist)
+        # end_inf_time = time.time()
+        # print(f'inference time:{end_inf_time - start_dist_time}')
+        #
+        # dist_list = np.array(dist_list).transpose(1, 0).reshape(B, H, W)
 
         # upsample
         dist_list = torch.tensor(dist_list)
         score_map = F.interpolate(dist_list.unsqueeze(1), size=x.size(2), mode='bilinear',
                                   align_corners=False).squeeze().numpy()
-        
+
         # apply gaussian smoothing on the score map
         for i in range(score_map.shape[0]):
             score_map[i] = gaussian_filter(score_map[i], sigma=4)
-        
+
         # Normalization
         max_score = score_map.max()
         min_score = score_map.min()
         scores = (score_map - min_score) / (max_score - min_score)
-        
+
         # calculate image-level ROC AUC score
         img_scores = scores.reshape(scores.shape[0], -1).max(axis=1)
         gt_list = np.asarray(gt_list)
@@ -189,7 +215,7 @@ def main():
         total_roc_auc.append(img_roc_auc)
         print('image ROCAUC: %.3f' % (img_roc_auc))
         fig_img_rocauc.plot(fpr, tpr, label='%s img_ROCAUC: %.3f' % (class_name, img_roc_auc))
-        
+
         # get optimal threshold
         gt_mask = np.asarray(gt_mask_list)
         precision, recall, thresholds = precision_recall_curve(gt_mask.flatten(), scores.flatten())
@@ -289,7 +315,7 @@ def embedding_concat(x, y):
     s = int(H1 / H2)
     x = F.unfold(x, kernel_size=s, dilation=1, stride=s)
     x = x.view(B, C1, -1, H2, W2)
-    z = torch.zeros(B, C1 + C2, x.size(2), H2, W2)
+    z = torch.zeros(B, C1 + C2, x.size(2), H2, W2).to(x.device)
     for i in range(x.size(2)):
         z[:, :, i, :, :] = torch.cat((x[:, :, i, :, :], y), 1)
     z = z.view(B, -1, H2 * W2)
