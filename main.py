@@ -21,7 +21,6 @@ import time
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from torchvision.models import wide_resnet50_2, resnet18
 
 import datasets.mvtec as mvtec
 from resnet import CustomResnet

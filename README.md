@@ -127,6 +127,9 @@ MVTec AD datasets : Download from [MVTec website](https://www.mvtec.com/company/
     <img src="imgs/zipper.png" width="600"\>
 </p>
 
+## Potholes project
+* find good samples on pothole600 by bbox_analysis.py
+
 ## Reference
 [1] Thomas Defard, Aleksandr Setkov, Angelique Loesch, Romaric Audigier. *PaDiM: a Patch Distribution Modeling Framework for Anomaly Detection and Localization*. https://arxiv.org/pdf/2011.08785
 
