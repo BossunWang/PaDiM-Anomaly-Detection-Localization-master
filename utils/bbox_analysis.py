@@ -105,8 +105,10 @@ def getData(image_paths, label_paths):
 
 def saveImageROI(image_paths,
                  label_paths,
+                 gt_paths,
                  save_normal_folder1, save_normal_folder2,
                  save_anomaly_folder,
+                 save_gt_folder,
                  data_dict,
                  bbox_cond=False):
     os.makedirs(save_normal_folder1, exist_ok=True)
@@ -165,6 +167,8 @@ def saveImageROI(image_paths,
                     # print(np.log(w * img_w * h * img_h))
                     save_path = all_images[i].replace(".jpg", "")
                     save_path = save_path.replace(".JPG", "")
+                    save_path = save_path.replace(".png", "")
+
                     save_anomaly_path = save_path.replace(image_paths, save_anomaly_folder)
                     save_anomaly_path += f'_{li}.jpg'
                     save_ROI(image, [x_c, y_c, w, h], save_anomaly_path)
@@ -177,14 +181,23 @@ def saveImageROI(image_paths,
                     save_normal_path2 += f'_{li}.jpg'
                     save_ROI(image, [x_c + w, y_c, w, h], save_normal_path2)
 
+                    if save_gt_folder is not None:
+                        os.makedirs(save_gt_folder, exist_ok=True)
+                        gt_image = cv2.imread(all_images[i].replace(image_paths, gt_paths))
+                        save_gt_path = save_path.replace(image_paths, save_gt_folder)
+                        save_gt_path += f'_{li}.jpg'
+                        save_ROI(gt_image, [x_c , y_c, w, h], save_gt_path)
+
                     valid_labels += 1
+
     print(f'valid_labels/total_labels: {valid_labels}/{total_labels}')
 
 
 def analysis_bbox(analysis_folder,
-                  dataset_folder, img_folder, label_folder,
+                  dataset_folder, img_folder, label_folder, gt_folder,
                   save_anomaly_folder,
                   save_normal_folder1, save_normal_folder2,
+                  save_gt_folder,
                   bbox_cond):
     data_dict = getData(
         image_paths=os.path.join(dataset_folder, img_folder),
@@ -218,9 +231,11 @@ def analysis_bbox(analysis_folder,
     saveImageROI(
         os.path.join(dataset_folder, img_folder),
         os.path.join(dataset_folder, label_folder),
+        os.path.join(dataset_folder, gt_folder),
         save_normal_folder1,
         save_normal_folder2,
         save_anomaly_folder,
+        save_gt_folder,
         data_new_dict,
         bbox_cond,
     )
@@ -233,15 +248,18 @@ def main():
     dataset_folder = "/media/glory/46845c74-37f7-48d7-8b72-e63c83fa4f68/ultralytics_datasets"
     img_folder = 'pothole_dataset_v8/train/images/'
     label_folder = 'pothole_dataset_v8/train/labels/'
+    gt_folder = ''
 
     save_anomaly_folder = os.path.join(dataset_folder, 'pothole_dataset_v8/potholes_roi/test/potholes/')
     save_normal_folder1 = os.path.join(dataset_folder, 'pothole_dataset_v8/potholes_roi/train/potholes_neighbor/')
     save_normal_folder2 = os.path.join(dataset_folder, 'pothole_dataset_v8/potholes_roi/test/potholes_neighbor/')
+    save_gt_folder = None
 
     analysis_bbox(analysis_folder,
-                  dataset_folder, img_folder, label_folder,
+                  dataset_folder, img_folder, label_folder, gt_folder,
                   save_anomaly_folder,
                   save_normal_folder1, save_normal_folder2,
+                  save_gt_folder,
                   bbox_cond=True
                   )
 
@@ -251,16 +269,19 @@ def main():
     dataset_folder = "/media/glory/46845c74-37f7-48d7-8b72-e63c83fa4f68/ultralytics_datasets"
     img_folder = 'pothole600/training/images/'
     label_folder = 'pothole600/training/labels/'
+    gt_folder = 'pothole600/training/gt/'
 
     # saved bbox of potholes' neighbor as good samples
     save_anomaly_folder = os.path.join(dataset_folder, 'pothole600/training/potholes_roi/test/potholes/')
     save_normal_folder1 = os.path.join(dataset_folder, 'pothole600/training/potholes_roi/train/good/')
     save_normal_folder2 = os.path.join(dataset_folder, 'pothole600/training/potholes_roi/test/good/')
+    save_gt_folder = os.path.join(dataset_folder, 'pothole600/training/potholes_roi/ground_truth/potholes/')
 
     analysis_bbox(analysis_folder,
-                  dataset_folder, img_folder, label_folder,
+                  dataset_folder, img_folder, label_folder, gt_folder,
                   save_anomaly_folder,
                   save_normal_folder1, save_normal_folder2,
+                  save_gt_folder,
                   bbox_cond=False
                   )
 
@@ -270,16 +291,19 @@ def main():
     dataset_folder = "/media/glory/46845c74-37f7-48d7-8b72-e63c83fa4f68/ultralytics_datasets"
     img_folder = 'Pothole.v1-raw.yolov8/train/images/'
     label_folder = 'Pothole.v1-raw.yolov8/train/labels/'
+    gt_folder = ''
 
     # saved bbox of potholes' neighbor as good samples
     save_anomaly_folder = os.path.join(dataset_folder, 'Pothole.v1-raw.yolov8/train/potholes_roi/test/potholes/')
     save_normal_folder1 = os.path.join(dataset_folder, 'Pothole.v1-raw.yolov8/train/potholes_roi/train/potholes_neighbor/')
     save_normal_folder2 = os.path.join(dataset_folder, 'Pothole.v1-raw.yolov8/train/potholes_roi/test/potholes_neighbor/')
+    save_gt_folder = None
 
     analysis_bbox(analysis_folder,
-                  dataset_folder, img_folder, label_folder,
+                  dataset_folder, img_folder, label_folder, gt_folder,
                   save_anomaly_folder,
                   save_normal_folder1, save_normal_folder2,
+                  save_gt_folder,
                   bbox_cond=True
                   )
 
