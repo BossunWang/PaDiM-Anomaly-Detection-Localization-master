@@ -170,22 +170,22 @@ def saveImageROI(image_paths,
                     save_path = save_path.replace(".png", "")
 
                     save_anomaly_path = save_path.replace(image_paths, save_anomaly_folder)
-                    save_anomaly_path += f'_{li}.jpg'
+                    save_anomaly_path += f'_{li}.png'
                     save_ROI(image, [x_c, y_c, w, h], save_anomaly_path)
                     # saved neighbor as good example
                     save_normal_path1 = save_path.replace(image_paths, save_normal_folder1)
-                    save_normal_path1 += f'_{li}.jpg'
+                    save_normal_path1 += f'_{li}.png'
                     save_ROI(image, [x_c - w, y_c, w, h], save_normal_path1)
 
                     save_normal_path2 = save_path.replace(image_paths, save_normal_folder2)
-                    save_normal_path2 += f'_{li}.jpg'
+                    save_normal_path2 += f'_{li}.png'
                     save_ROI(image, [x_c + w, y_c, w, h], save_normal_path2)
 
                     if save_gt_folder is not None:
                         os.makedirs(save_gt_folder, exist_ok=True)
                         gt_image = cv2.imread(all_images[i].replace(image_paths, gt_paths))
                         save_gt_path = save_path.replace(image_paths, save_gt_folder)
-                        save_gt_path += f'_{li}.jpg'
+                        save_gt_path += f'_{li}.png'
                         save_ROI(gt_image, [x_c , y_c, w, h], save_gt_path)
 
                     valid_labels += 1
