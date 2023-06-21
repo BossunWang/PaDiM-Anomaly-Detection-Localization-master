@@ -22,7 +22,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-import datasets.mvtec as mvtec
+import datasets.dataset as mvtec
 from resnet import CustomResnet
 
 
