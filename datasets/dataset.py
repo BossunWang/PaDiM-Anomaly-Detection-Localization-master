@@ -19,7 +19,7 @@ CLASS_NAMES = ['bottle']
 #                         'potholes_train_roi_valid_org',
 #                         'potholes_train_collect_valid_org',
 #                         'potholes_train_collect_test_roi',]
-CLASS_NAMES_POTHOLES = ['potholes_train_collect_valid_org']
+CLASS_NAMES_POTHOLES = ['potholes_roi']
 
 
 class MVTecDataset(Dataset):
@@ -168,6 +168,8 @@ class PotholesDataset(Dataset):
             mask = torch.zeros([1, self.cropsize, self.cropsize])
         else:
             mask = Image.open(mask).convert('L')
+            fn = lambda x: 255 if x > 0 else 0
+            mask = mask.convert('L').point(fn, mode='1')
             mask = self.transform_mask(mask)
 
         return x, y, mask
