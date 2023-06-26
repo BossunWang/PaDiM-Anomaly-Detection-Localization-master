@@ -49,7 +49,16 @@ def save_ROI(image, bbox, save_path):
     xmax = int(x2 * w)
     ymax = int(y2 * h)
 
-    if xmin >= 0 and xmax < w and ymin >= 0 and ymax < h:
+    xmin = xmin if xmin > 0 else 0
+    xmin = xmin if xmin < w else w - 1
+    ymin = ymin if ymin > 0 else 0
+    ymin = ymin if ymin < h else h - 1
+    xmax = xmax if xmax > 0 else 0
+    xmax = xmax if xmax < w else w - 1
+    ymax = ymax if ymax > 0 else 0
+    ymax = ymax if ymax < h else h - 1
+
+    if xmin < xmax and ymin < ymax:
         img_crop = image[ymin: ymax, xmin: xmax]
         cv2.imwrite(save_path, img_crop)
 
@@ -110,7 +119,9 @@ def saveImageROI(image_paths,
                  save_anomaly_folder,
                  save_gt_folder,
                  data_dict,
-                 bbox_cond=False):
+                 bbox_cond=False,
+                 split_format=None,
+                 bbox_scale=1):
     os.makedirs(save_normal_folder1, exist_ok=True)
     os.makedirs(save_normal_folder2, exist_ok=True)
     os.makedirs(save_anomaly_folder, exist_ok=True)
@@ -141,54 +152,100 @@ def saveImageROI(image_paths,
         if not os.path.isfile(os.path.join(label_paths, image_name + '.txt')):
             continue
 
-        with open(os.path.join(label_paths, image_name + '.txt'), 'r') as f:
-            bboxes = []
-            labels = []
-            label_lines = f.readlines()
-            for li, label_line in enumerate(label_lines):
-                label = label_line[0]
-                bbox_string = label_line[2:]
-                x_c, y_c, w, h = bbox_string.split(' ')
-                x_c = float(x_c)
-                y_c = float(y_c)
-                w = float(w)
-                h = float(h)
+        if split_format is not None:
+            gt_image = cv2.imread(all_images[i].replace(image_paths, gt_paths).replace(".jpg", ".png"))
+            resize_image = cv2.resize(image, (split_format[0], split_format[1]))
+            resize_gt_image = cv2.resize(gt_image, (split_format[0], split_format[1]))
 
-                total_labels += 1
+            grid_w = split_format[0] // split_format[2]
+            grid_h = split_format[1] // split_format[3]
+            grid_ws_list= [grid_w * i for i in range(split_format[2])]
+            grid_hs_list = [grid_h * j for j in range(split_format[3])]
 
-                if w * h <= 0:
-                    continue
-                # elif np.log(w * img_w * h * img_h) >= area_mean + 0 * area_std \
-                #     and wh_ratio_mean - 1 * wh_ratio_std < (w * img_w) / (h * img_h) < wh_ratio_mean + 1 * wh_ratio_std:
-                elif np.log(w * img_w * h * img_h) >= area_mean + 0 * area_std \
-                     and 0.5 < (w * img_w) / (h * img_h) < 2.0\
-                     or not bbox_cond:
-                    # print(w * img_w / h * img_h)
-                    # print(np.log(w * img_w * h * img_h))
-                    save_path = all_images[i].replace(".jpg", "")
-                    save_path = save_path.replace(".JPG", "")
-                    save_path = save_path.replace(".png", "")
+            save_path = all_images[i].replace(".jpg", "")
+            save_path = save_path.replace(".JPG", "")
+            save_path = save_path.replace(".png", "")
 
-                    save_anomaly_path = save_path.replace(image_paths, save_anomaly_folder)
-                    save_anomaly_path += f'_{li}.png'
-                    save_ROI(image, [x_c, y_c, w, h], save_anomaly_path)
-                    # saved neighbor as good example
-                    save_normal_path1 = save_path.replace(image_paths, save_normal_folder1)
-                    save_normal_path1 += f'_{li}.png'
-                    save_ROI(image, [x_c - w, y_c, w, h], save_normal_path1)
+            g_count = 0
+            for gh in grid_hs_list:
+                for gw in grid_ws_list:
+                    grid_img = resize_image[gh: gh + grid_h, gw: gw + grid_w, :].copy()
+                    grid_gt_img = resize_gt_image[gh: gh + grid_h, gw: gw + grid_w, :].copy()
 
-                    save_normal_path2 = save_path.replace(image_paths, save_normal_folder2)
-                    save_normal_path2 += f'_{li}.png'
-                    save_ROI(image, [x_c + w, y_c, w, h], save_normal_path2)
+                    # save to test/good
+                    if np.count_nonzero(grid_gt_img) == 0:
+                        save_normal_path2 = save_path.replace(image_paths, save_normal_folder2)
+                        save_normal_path2 += f'_{g_count}.png'
+                        cv2.imwrite(save_normal_path2, grid_img)
+                    # save to test/abnormal
+                    else:
+                        save_anomaly_path = save_path.replace(image_paths, save_anomaly_folder)
+                        save_anomaly_path += f'_{g_count}.png'
+                        cv2.imwrite(save_anomaly_path, grid_img)
+                        if save_gt_folder is not None:
+                            os.makedirs(save_gt_folder, exist_ok=True)
+                            save_gt_path = save_path.replace(image_paths, save_gt_folder)
+                            save_gt_path += f'_{g_count}.png'
+                            cv2.imwrite(save_gt_path, grid_gt_img)
 
-                    if save_gt_folder is not None:
-                        os.makedirs(save_gt_folder, exist_ok=True)
-                        gt_image = cv2.imread(all_images[i].replace(image_paths, gt_paths))
-                        save_gt_path = save_path.replace(image_paths, save_gt_folder)
-                        save_gt_path += f'_{li}.png'
-                        save_ROI(gt_image, [x_c , y_c, w, h], save_gt_path)
+                    g_count += 1
 
-                    valid_labels += 1
+        else:
+            with open(os.path.join(label_paths, image_name + '.txt'), 'r') as f:
+                bboxes = []
+                labels = []
+                label_lines = f.readlines()
+                for li, label_line in enumerate(label_lines):
+                    label = label_line[0]
+                    bbox_string = label_line[2:]
+                    x_c, y_c, w, h = bbox_string.split(' ')
+                    x_c = float(x_c)
+                    y_c = float(y_c)
+                    w = float(w)
+                    h = float(h)
+
+                    total_labels += 1
+
+                    if w * h <= 0:
+                        continue
+                    # elif np.log(w * img_w * h * img_h) >= area_mean + 0 * area_std \
+                    #     and wh_ratio_mean - 1 * wh_ratio_std < (w * img_w) / (h * img_h) < wh_ratio_mean + 1 * wh_ratio_std:
+                    elif np.log(w * img_w * h * img_h) >= area_mean + 0 * area_std \
+                         and 0.5 < (w * img_w) / (h * img_h) < 2.0\
+                         or not bbox_cond:
+                        # print(w * img_w / h * img_h)
+                        # print(np.log(w * img_w * h * img_h))
+                        save_path = all_images[i].replace(".jpg", "")
+                        save_path = save_path.replace(".JPG", "")
+                        save_path = save_path.replace(".png", "")
+
+                        if bbox_scale != 1:
+                            new_w = max(w, h)
+                            new_h = max(w, h)
+                        else:
+                            new_w = w
+                            new_h = h
+
+                        save_anomaly_path = save_path.replace(image_paths, save_anomaly_folder)
+                        save_anomaly_path += f'_{li}.png'
+                        save_ROI(image, [x_c, y_c, new_w * bbox_scale, new_h * bbox_scale], save_anomaly_path)
+                        # saved neighbor as good example
+                        save_normal_path1 = save_path.replace(image_paths, save_normal_folder1)
+                        save_normal_path1 += f'_{li}.png'
+                        save_ROI(image, [x_c - w, y_c, w, h], save_normal_path1)
+
+                        save_normal_path2 = save_path.replace(image_paths, save_normal_folder2)
+                        save_normal_path2 += f'_{li}.png'
+                        save_ROI(image, [x_c + w, y_c, w, h], save_normal_path2)
+
+                        if save_gt_folder is not None:
+                            os.makedirs(save_gt_folder, exist_ok=True)
+                            gt_image = cv2.imread(all_images[i].replace(image_paths, gt_paths).replace(".jpg", ".png"))
+                            save_gt_path = save_path.replace(image_paths, save_gt_folder)
+                            save_gt_path += f'_{li}.png'
+                            save_ROI(gt_image, [x_c , y_c, new_w * bbox_scale, new_h * bbox_scale], save_gt_path)
+
+                        valid_labels += 1
 
     print(f'valid_labels/total_labels: {valid_labels}/{total_labels}')
 
@@ -198,7 +255,9 @@ def analysis_bbox(analysis_folder,
                   save_anomaly_folder,
                   save_normal_folder1, save_normal_folder2,
                   save_gt_folder,
-                  bbox_cond):
+                  bbox_cond,
+                  split_format=None,
+                  bbox_scale=1):
     data_dict = getData(
         image_paths=os.path.join(dataset_folder, img_folder),
         label_paths=os.path.join(dataset_folder, label_folder)
@@ -238,6 +297,8 @@ def analysis_bbox(analysis_folder,
         save_gt_folder,
         data_new_dict,
         bbox_cond,
+        split_format,
+        bbox_scale
     )
 
 
@@ -305,6 +366,57 @@ def main():
                   save_normal_folder1, save_normal_folder2,
                   save_gt_folder,
                   bbox_cond=True
+                  )
+
+    # Cracks-and-Potholes-in-Road-Images-Dataset ROI mask
+    analysis_folder = "Cracks_and_Potholes_in_Road_dataset_analysis"
+    os.makedirs(analysis_folder, exist_ok=True)
+
+    dataset_folder = "/media/glory/46845c74-37f7-48d7-8b72-e63c83fa4f68/ultralytics_datasets"
+    img_folder = 'biankatpas-Cracks-and-Potholes-in-Road-Images-Dataset-1f20054/potholes_yolo_detection/train/ROI_mask/'
+    label_folder = 'biankatpas-Cracks-and-Potholes-in-Road-Images-Dataset-1f20054/potholes_yolo_detection/train/labels/'
+    gt_folder = 'biankatpas-Cracks-and-Potholes-in-Road-Images-Dataset-1f20054/potholes_yolo_detection/train/gt/'
+
+    save_anomaly_folder = os.path.join(dataset_folder, 'biankatpas-Cracks-and-Potholes-in-Road-Images-Dataset-1f20054/potholes_roi_mask/test/potholes/')
+    save_normal_folder1 = os.path.join(dataset_folder, 'biankatpas-Cracks-and-Potholes-in-Road-Images-Dataset-1f20054/potholes_roi_mask/train/')
+    save_normal_folder2 = os.path.join(dataset_folder, 'biankatpas-Cracks-and-Potholes-in-Road-Images-Dataset-1f20054/potholes_roi_mask/test/good/')
+    save_gt_folder = os.path.join(dataset_folder, 'biankatpas-Cracks-and-Potholes-in-Road-Images-Dataset-1f20054/potholes_roi_mask/ground_truth/potholes/')
+    split_format = [1024, 640, 4, 2]
+
+    analysis_bbox(analysis_folder,
+                  dataset_folder, img_folder, label_folder, gt_folder,
+                  save_anomaly_folder,
+                  save_normal_folder1, save_normal_folder2,
+                  save_gt_folder,
+                  False,
+                  split_format
+                  )
+
+    # Cracks-and-Potholes-in-Road-Images-Dataset ROI
+    analysis_folder = "Cracks_and_Potholes_in_Road_dataset_analysis"
+    os.makedirs(analysis_folder, exist_ok=True)
+
+    dataset_folder = "/media/glory/46845c74-37f7-48d7-8b72-e63c83fa4f68/ultralytics_datasets"
+    img_folder = 'biankatpas-Cracks-and-Potholes-in-Road-Images-Dataset-1f20054/potholes_yolo_detection/train/images/'
+    label_folder = 'biankatpas-Cracks-and-Potholes-in-Road-Images-Dataset-1f20054/potholes_yolo_detection/train/labels/'
+    gt_folder = 'biankatpas-Cracks-and-Potholes-in-Road-Images-Dataset-1f20054/potholes_yolo_detection/train/gt/'
+
+    save_anomaly_folder = os.path.join(dataset_folder,
+                                       'biankatpas-Cracks-and-Potholes-in-Road-Images-Dataset-1f20054/potholes_roi/test/potholes/')
+    save_normal_folder1 = os.path.join(dataset_folder,
+                                       'biankatpas-Cracks-and-Potholes-in-Road-Images-Dataset-1f20054/potholes_roi/train/potholes_neighbor/')
+    save_normal_folder2 = os.path.join(dataset_folder,
+                                       'biankatpas-Cracks-and-Potholes-in-Road-Images-Dataset-1f20054/potholes_roi/test/potholes_neighbor/')
+    save_gt_folder = os.path.join(dataset_folder,
+                                  'biankatpas-Cracks-and-Potholes-in-Road-Images-Dataset-1f20054/potholes_roi/ground_truth/potholes/')
+
+    analysis_bbox(analysis_folder,
+                  dataset_folder, img_folder, label_folder, gt_folder,
+                  save_anomaly_folder,
+                  save_normal_folder1, save_normal_folder2,
+                  save_gt_folder,
+                  bbox_cond=True,
+                  bbox_scale=2
                   )
 
 
