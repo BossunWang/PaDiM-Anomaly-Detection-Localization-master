@@ -10,6 +10,12 @@ import matplotlib.pyplot as plt
 import time
 import cv2
 from threading import Thread
+from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_curve
+from sklearn.metrics import confusion_matrix
+from sklearn.metrics import precision_score
+from sklearn.metrics import recall_score
+from sklearn.metrics import f1_score
 
 import torch
 import torch.nn.functional as F
@@ -292,10 +298,10 @@ def runYoloDetection(model, image, show=True):
     result = results[0]
     mask_total_image = np.zeros_like(image)
     if hasattr(result.masks, "data"):
-        mask_total_image = np.zeros(result.masks.masks.shape[1:]).astype('uint8')
+        mask_total_image = np.zeros(result.masks.data.shape[1:]).astype('uint8')
         # print(mask_total_image.shape)
-        for i in range(result.masks.masks.shape[0]):
-            mask_image = result.masks.masks[i].cpu().detach().numpy() * 255
+        for i in range(result.masks.data.shape[0]):
+            mask_image = result.masks.data[i].cpu().detach().numpy() * 255
             mask_image = mask_image.astype('uint8')
             # print(mask_image.shape)
 
@@ -323,6 +329,8 @@ def parse_args():
     parser.add_argument('--yolo_weight_path', type=str, default='train_potholes.pkl')
     parser.add_argument('--save_path', type=str, default='./sim_potholes_result')
     parser.add_argument('--arch', type=str, choices=['resnet18', 'wide_resnet50_2'], default='wide_resnet50_2')
+    parser.add_argument("--ensemble", default=False, help="ensemble all datection",
+                        action="store_true")
     return parser.parse_args()
 
 
@@ -346,6 +354,7 @@ def main():
 
     if not os.path.isfile(args.yolo_weight_path):
         print('can not load yolo weight from: %s' % args.yolo_weight_path)
+        return 0
 
     yolo_model = YOLO(args.yolo_weight_path)
 
@@ -367,7 +376,7 @@ def main():
 
     idx = torch.tensor(sample(range(0, t_d), d)).to(device)
 
-    os.makedirs(os.path.join(args.save_path, 'temp_%s' % args.arch), exist_ok=True)
+    os.makedirs(args.save_path, exist_ok=True)
 
     # grid method
     split_format = [1024, 640, 4, 2]
@@ -377,6 +386,17 @@ def main():
     bbox_area_std = 1.6787692863341874
     bbox_wh_ratio_mean = 1.8448105276099263
     bbox_wh_ratio_std = 0.8495229148189919
+
+    # create video writer
+    fourcc = cv2.VideoWriter_fourcc(*'MP4V')
+    image_size = (split_format[0], split_format[1])
+    video_writer = cv2.VideoWriter(os.path.join(args.save_path, 'output.mp4'),
+                                  fourcc,
+                                  20.0,
+                                  image_size)
+
+    gt_mask_list = []
+    pred_mask_list = []
 
     for dirPath, dirNames, fileNames in os.walk(args.data_path):
         for f in fileNames:
@@ -388,6 +408,8 @@ def main():
             resize_image = cv2.resize(image, (split_format[0], split_format[1]))
             resize_gt_image = cv2.resize(gt_image, (split_format[0], split_format[1]))
             resize_roi_image = cv2.resize(roi_image, (split_format[0], split_format[1]))
+
+            _, resize_gt_image = cv2.threshold(resize_gt_image, 127, 255, cv2.THRESH_BINARY)
 
             # multi-thread
             anomaly_thread = AnomalyDetectionThread(device,
@@ -407,17 +429,32 @@ def main():
             anomaly_thread.join()
             yolo_thread.join()
 
-            mask_total_image = cv2.bitwise_or(anomaly_thread.mask_img, yolo_thread.mask_img)
+            if args.ensemble:
+                mask_total_image = cv2.bitwise_or(anomaly_thread.mask_img, yolo_thread.mask_img)
+            else:
+                mask_total_image = yolo_thread.mask_img
             blend_image = cv2.addWeighted(resize_image, 0.5, mask_total_image, 0.5, 0)
 
             run_end_time = time.time()
             print(f'run thread time:{run_end_time - run_start_time}')
 
+            mask_total_image = cv2.cvtColor(mask_total_image, cv2.COLOR_BGR2GRAY)
+            _, mask_total_image = cv2.threshold(mask_total_image, 127, 255, cv2.THRESH_BINARY)
+            gt_mask_list.append(resize_gt_image)
+            pred_mask_list.append(mask_total_image)
+
             cv2.imshow("image", resize_image)
             cv2.imshow("blend_image", blend_image)
             cv2.imshow("mask", mask_total_image)
             cv2.imshow("gt", resize_gt_image)
-            cv2.waitKey(0)
+            cv2.waitKey(1)
+
+            # write to video
+            run_fps = 1. / (run_end_time - run_start_time + 1e-10)
+            text = "fps:{:.4f}".format(run_fps)
+            cv2.putText(blend_image, text, (10, 10),
+                        cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 255))
+            video_writer.write(blend_image)
 
             # single thread
             # runAnomalyDetection(device,
@@ -432,6 +469,34 @@ def main():
 
             # runYoloDetection(yolo_model, resize_image)
 
+    video_writer.release()
+
+    gt_mask = np.asarray(gt_mask_list) / 255.0
+    pred_mask = np.asarray(pred_mask_list) / 255.0
+
+    # calculate per-pixel level PR
+    per_pixel_cm = confusion_matrix(gt_mask.flatten(), pred_mask.flatten())
+    per_pixel_precision = precision_score(gt_mask.flatten(), pred_mask.flatten(), zero_division=0)
+    per_pixel_recall = recall_score(gt_mask.flatten(), pred_mask.flatten())
+    per_pixel_f1 = f1_score(gt_mask.flatten(), pred_mask.flatten())
+    print('confusion matrix: \n', per_pixel_cm)
+    print('precision: %.3f' % per_pixel_precision)
+    print('recall: %.3f' % per_pixel_recall)
+    print('f1: %.3f' % per_pixel_f1)
+
+    # calculate per-pixel level ROCAUC
+    fpr, tpr, _ = roc_curve(gt_mask.flatten(), pred_mask.flatten())
+    per_pixel_auc = roc_auc_score(gt_mask.flatten(), pred_mask.flatten())
+    print('pixel ROCAUC: %.3f' % per_pixel_auc)
+    print('pixel fpr:', fpr)
+    print('pixel tpr:', tpr)
+
+    plt.figure('ROC Curve')
+    plt.plot(fpr, tpr, label='ROC_AUC: %.3f' % per_pixel_auc)
+    plt.xlabel('fpr')
+    plt.ylabel('tpr')
+    plt.legend()
+    plt.savefig(os.path.join(args.save_path, 'roc_curve.png'), dpi=100)
 
 
 if __name__ == '__main__':
