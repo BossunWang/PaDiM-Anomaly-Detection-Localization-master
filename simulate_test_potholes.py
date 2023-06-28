@@ -326,6 +326,7 @@ def parse_args():
     parser = argparse.ArgumentParser('PaDiM')
     parser.add_argument('--data_path', type=str, default='D:/dataset/mvtec_anomaly_detection')
     parser.add_argument('--train_feature_filepath', type=str, default='train_potholes.pkl')
+    parser.add_argument('--train_idx_filepath', type=str, default='idx.npy')
     parser.add_argument('--yolo_weight_path', type=str, default='train_potholes.pkl')
     parser.add_argument('--save_path', type=str, default='./sim_potholes_result')
     parser.add_argument('--arch', type=str, choices=['resnet18', 'wide_resnet50_2'], default='wide_resnet50_2')
@@ -342,16 +343,6 @@ def main():
     args = parse_args()
 
     # load model
-    if args.arch == 'resnet18':
-        t_d = 448
-        d = 100
-    elif args.arch == 'wide_resnet50_2':
-        t_d = 1792
-        d = 550
-    else:
-        print('arch not support')
-        return 0
-
     if not os.path.isfile(args.yolo_weight_path):
         print('can not load yolo weight from: %s' % args.yolo_weight_path)
         return 0
@@ -374,7 +365,7 @@ def main():
     if use_cuda:
         torch.cuda.manual_seed_all(1024)
 
-    idx = torch.tensor(sample(range(0, t_d), d)).to(device)
+    idx = torch.from_numpy(np.load(args.train_idx_filepath)).to(device)
 
     os.makedirs(args.save_path, exist_ok=True)
 

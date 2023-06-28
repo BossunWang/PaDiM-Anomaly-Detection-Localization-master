@@ -42,6 +42,7 @@ def parse_args():
     parser.add_argument('--data_path', type=str, default='D:/dataset/mvtec_anomaly_detection')
     parser.add_argument('--save_path', type=str, default='./mvtec_result')
     parser.add_argument('--arch', type=str, choices=['resnet18', 'wide_resnet50_2'], default='wide_resnet50_2')
+    parser.add_argument('--d', type=int, default=100, help='should be smaller than number of samples')
     return parser.parse_args()
 
 
@@ -52,10 +53,13 @@ def main():
     # load model
     if args.arch == 'resnet18':
         t_d = 448
-        d = 100
+        d = args.d
     elif args.arch == 'wide_resnet50_2':
         t_d = 1792
-        d = 550
+        d = args.d
+    else:
+        print("args.arch not supported")
+        return 0
 
     model = CustomResnet(args.arch, pretrained=True)
     model.to(device)
@@ -65,9 +69,10 @@ def main():
     if use_cuda:
         torch.cuda.manual_seed_all(1024)
 
-    idx = torch.tensor(sample(range(0, t_d), d)).to(device)
-
     os.makedirs(os.path.join(args.save_path, 'temp_%s' % args.arch), exist_ok=True)
+    idx = torch.tensor(sample(range(0, t_d), d)).to(device)
+    np.save(os.path.join(args.save_path, "idx.npy"), idx.cpu().detach().numpy())
+
     fig, ax = plt.subplots(1, 2, figsize=(20, 10))
     fig_img_rocauc = ax[0]
     fig_pixel_rocauc = ax[1]
@@ -194,7 +199,7 @@ def main():
 
         # upsample
         dist_list = torch.tensor(dist_list)
-        score_map = F.interpolate(dist_list.unsqueeze(1), size=x.size(2), mode='bilinear',
+        score_map = F.interpolate(dist_list.unsqueeze(1), size=test_imgs[0].shape[2], mode='bilinear',
                                   align_corners=False).squeeze().numpy()
 
         # apply gaussian smoothing on the score map
