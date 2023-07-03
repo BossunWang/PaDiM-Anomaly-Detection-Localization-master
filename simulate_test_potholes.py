@@ -415,14 +415,16 @@ def main():
             yolo_thread = YoloDetectionThread(yolo_model, resize_image)
 
             run_start_time = time.time()
-            anomaly_thread.start()
-            yolo_thread.start()
-            anomaly_thread.join()
-            yolo_thread.join()
 
             if args.ensemble:
+                anomaly_thread.start()
+                yolo_thread.start()
+                anomaly_thread.join()
+                yolo_thread.join()
                 mask_total_image = cv2.bitwise_or(anomaly_thread.mask_img, yolo_thread.mask_img)
             else:
+                yolo_thread.start()
+                yolo_thread.join()
                 mask_total_image = yolo_thread.mask_img
             blend_image = cv2.addWeighted(resize_image, 0.5, mask_total_image, 0.5, 0)
 
@@ -474,6 +476,11 @@ def main():
     print('precision: %.3f' % per_pixel_precision)
     print('recall: %.3f' % per_pixel_recall)
     print('f1: %.3f' % per_pixel_f1)
+    f = open(os.path.join(args.save_path, 'scores_result.txt'), 'w')
+    f.write('precision: %.3f\n' % per_pixel_precision)
+    f.write('recall: %.3f\n' % per_pixel_recall)
+    f.write('f1: %.3f\n' % per_pixel_f1)
+    f.close()
 
     # calculate per-pixel level ROCAUC
     fpr, tpr, _ = roc_curve(gt_mask.flatten(), pred_mask.flatten())
